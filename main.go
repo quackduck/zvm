@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"compress/gzip"
 	"encoding/hex"
 	"fmt"
 	"github.com/bearmini/bitstream-go"
@@ -10,13 +11,13 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 )
 
 var (
-	encodeHaHa = []rune("zachZACH𝐳𝐚𝐜𝐡𝚣𝚊𝚌𝚑𝕫𝕒𝕔𝕙𝘇𝗮𝗰𝗵𝙯𝙖𝙘𝙝𝓏𝒶𝒸𝒽") //  zachZACH𝐳𝐚𝐜𝐡𝚣𝚊𝚌𝚑𝕫𝕒𝕔𝕙𝘇𝗮𝗰𝗵𝙯𝙖𝙘𝙝𝓏𝒶𝒸𝒽
+	//encodeHaHa = []rune("zachZACH𝐳𝐚𝐜𝐡𝚣𝚊𝚌𝚑") //  zachZACH𝐳𝐚𝐜𝐡𝚣𝚊𝚌𝚑𝕫𝕒𝕔𝕙𝘇𝗮𝗰𝗵𝙯𝙖𝙘𝙝𝓏𝒶𝒸𝒽
+	encodeHaHa = []rune("zachZACH𝐳𝐚𝐜𝐡𝚣𝚊𝚌𝚑𝕫𝕒𝕔𝕙𝘇𝗮𝗰𝗵𝙯𝙖𝙘𝙝𝓏𝒶𝒸𝒽𝑧𝑎𝑐ℎ𝒛𝒂𝒄𝒉𝗓𝖺𝖼𝗁𝔃𝓪𝓬𝓱⒵⒜⒞⒣ｚａｃｈⓩⓐⓒⓗ🅉🄰🄲🄷") // 𝑧𝑎𝑐ℎ𝒛𝒂𝒄𝒉𝗓𝖺𝖼𝗁𝔃𝓪𝓬𝓱⒵⒜⒞⒣ｚａｃｈⓩⓐⓒⓗ🅉🄰🄲🄷
 	numOfBits = int(math.Log2(float64(len(encodeHaHa))))
 )
 
@@ -56,30 +57,69 @@ func makeZvmExecutable(exe string) error {
 	if err != nil {
 		return err
 	}
-	return encode(dst, src)
-}
 
-func runZvmExecutable(zvme string, args ...string) error {
-	dst, err := os.Create(zvme + strconv.Itoa(rand.Int())+".temp-exe")
-	//dst, err := os.CreateTemp("", "."+zvme +"*.temp.zvm")
+	gzfile, err := os.Create(exe + "temp-gzipped.zvm")
 	if err != nil {
 		return err
 	}
-	//defer os.Remove(dst.Name())
-	if err = dst.Chmod(0755); err != nil { // rwx r-x r-x
+	wg := gzip.NewWriter(gzfile)
+	_, err = io.Copy(wg, src)
+	if err != nil {
 		return err
 	}
+	err = wg.Flush()
+	if err != nil {
+		return err
+	}
+
+	gzfile.Sync()
+	gzfile.Seek(0, 0)
+
+	return encode(dst, gzfile)
+	//if err != nil {
+	//	return err
+	//}
+}
+
+func runZvmExecutable(zvme string, args ...string) error {
+	//toUnzip, err := os.Create(zvme + strconv.Itoa(rand.Int())+".temp-exe")
+	toUnzip, err := os.CreateTemp("", "."+zvme +"*.temp-to-unzip.zvm.")
+	if err != nil {
+		return err
+	}
+	fmt.Println("gzipped name", toUnzip.Name())
+	//defer os.Remove(toUnzip.Name())
 	src, err := os.Open(zvme)
 	if err != nil {
 		return err
 	}
-	err = decode(dst, src)
+	err = decode(toUnzip, src)
 	if err != nil {
 		return err
 	}
-	return nil
-	cmd := exec.Command("./"+dst.Name(), args...)
-	//cmd := exec.Command(dst.Name(), args...)
+
+	toRun, err := os.CreateTemp("", "."+zvme +"*.temp-unzipped.zvm.binary")
+	if err != nil {
+		return err
+	}
+	if err = toRun.Chmod(0755); err != nil { // rwx r-x r-x
+		return err
+	}
+	r, err := gzip.NewReader(toUnzip)
+	if err != nil {
+		//fmt.Println("OOOOOOO")
+		return err
+	}
+	_, err = io.Copy(toRun, r)
+	if err != nil {
+		return err
+	}
+	toRun.Sync()
+	toRun.Seek(0,0)
+	//return nil
+	//cmd := exec.Command("./"+toUnzip.Name(), args...)
+	cmd := exec.Command(toRun.Name(), args...)
+
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 
