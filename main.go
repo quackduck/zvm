@@ -36,7 +36,7 @@ Example session:
 	}
 	rand.Seed(time.Now().UnixNano())
 	if os.Args[1] == "import" {
-		err := makeZvmExecutable(os.Args[2])
+		err := makeNewZvmExecutable(os.Args[2])
 		if err != nil {
 			fmt.Println(err)
 		}
@@ -48,7 +48,7 @@ Example session:
 	}
 }
 
-func makeZvmExecutable(exe string) error {
+func makeNewZvmExecutable(exe string) error {
 	dst, err := os.Create(exe + ".zvm")
 	if err != nil {
 		return err
@@ -58,68 +58,109 @@ func makeZvmExecutable(exe string) error {
 		return err
 	}
 
-	gzfile, err := os.Create(exe + "temp-gzipped.zvm")
-	if err != nil {
-		return err
-	}
-	wg := gzip.NewWriter(gzfile)
-	_, err = io.Copy(wg, src)
-	if err != nil {
-		return err
-	}
-	err = wg.Flush()
-	if err != nil {
-		return err
-	}
-
-	gzfile.Sync()
-	gzfile.Seek(0, 0)
-
-	return encode(dst, gzfile)
+	//gzipped, err := os.CreateTemp("", "."+exe +"*.gzip-temp.zvm")
 	//if err != nil {
+	//	return err
+	//}
+	pr, pw := io.Pipe()
+	//defer pw.Close()
+	//defer pr.Close()
+	//ch1 := make(chan struct{})
+	//ch2 := make(chan struct{})
+	go func() {
+		// src -> gzip -> pw -> pr -> encode -> dst
+		w, _ := gzip.NewWriterLevel(pw, gzip.BestCompression)
+		_, err = io.Copy(w, src)
+		if err != nil {
+			panic(err)
+		}
+		//w.Flush()
+		err := w.Close()
+		if err != nil {
+			panic(err)
+		}
+		pw.Close()
+		//ch1 <- struct{}{}
+	}()
+	//fmt.Println("starting this too")
+	//gzipped.Sync()
+	//gzipped.Seek(0,0)
+
+	//name := gzipped.Name()
+	//gzipped.Close()
+	//go func() {
+		err = encode(dst, pr)
+		if err != nil {
+			panic(err)
+		}
+	//	ch1 <- struct{}{}
+	//}()
+	//<- ch1
+	//<- ch1
+	return nil
+	//if err = encode(dst, pr); err != nil {
 	//	return err
 	//}
 }
 
 func runZvmExecutable(zvme string, args ...string) error {
-	//toUnzip, err := os.Create(zvme + strconv.Itoa(rand.Int())+".temp-exe")
-	toUnzip, err := os.CreateTemp("", "."+zvme +"*.temp-to-unzip.zvm.")
+	//dst, err := os.Create(zvme + strconv.Itoa(rand.Int())+".temp-exe")
+	toRun, err := os.CreateTemp("", "."+zvme +"*.temp.zvm")
 	if err != nil {
 		return err
 	}
-	fmt.Println("gzipped name", toUnzip.Name())
-	//defer os.Remove(toUnzip.Name())
+	defer os.Remove(toRun.Name())
 	src, err := os.Open(zvme)
 	if err != nil {
 		return err
 	}
-	err = decode(toUnzip, src)
-	if err != nil {
-		return err
-	}
 
-	toRun, err := os.CreateTemp("", "."+zvme +"*.temp-unzipped.zvm.binary")
-	if err != nil {
-		return err
-	}
 	if err = toRun.Chmod(0755); err != nil { // rwx r-x r-x
 		return err
 	}
-	r, err := gzip.NewReader(toUnzip)
+
+	pr, pw := io.Pipe()
+	go func() {
+		err = decode(pw, src)
+		if err != nil {
+			panic(err)
+		}
+		src.Close()
+		//time.Sleep(1 * time.Second)
+		pw.Close()
+	}()
+	r, err := gzip.NewReader(pr)
 	if err != nil {
-		//fmt.Println("OOOOOOO")
 		return err
 	}
 	_, err = io.Copy(toRun, r)
 	if err != nil {
+		fmt.Println("yuh it's this guy :(")
 		return err
 	}
 	toRun.Sync()
-	toRun.Seek(0,0)
-	//return nil
-	//cmd := exec.Command("./"+toUnzip.Name(), args...)
-	cmd := exec.Command(toRun.Name(), args...)
+	toRun.Close()
 
+	//gunzipped, err := os.CreateTemp("", "."+zvme +"*.gunzip-temp.zvm") // the actual executable to run
+	//if err != nil {
+	//	return err
+	//}
+	//defer os.Remove(gunzipped.Name())
+	//if err = gunzipped.Chmod(0755); err != nil { // rwx r-x r-x
+	//	return err
+	//}
+	//
+	//r, err := gzip.NewReader(toUnzip)
+	//if err != nil {
+	//	return err
+	//}
+	//_, err = io.Copy(gunzipped, r)
+	//if err != nil {
+	//	return err
+	//}
+	//return nil
+	//cmd := exec.Command("./"+dst.Name(), args...)
+	cmd := exec.Command(toRun.Name(), args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 
