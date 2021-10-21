@@ -1,0 +1,16 @@
+cat
+cat.zvm
+echo
+echo.zvm
+ls
+ls.zvm
+zvm
+zvm.zvm
+.DS_Store
+.idea
+test.sh
+
+bash.zvm
+bash
+fish
+fish.zvm
