@@ -1,24 +1,24 @@
 package main
 
 import (
-	"bufio"
 	"compress/gzip"
 	"fmt"
-	"github.com/bearmini/bitstream-go"
 	"io"
-	"math"
 	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"github.com/quackduck/aces"
 )
 
 var (
-	//encodeHaHa = []rune("zachZACH𝐳𝐚𝐜𝐡𝚣𝚊𝚌𝚑") //  zachZACH𝐳𝐚𝐜𝐡𝚣𝚊𝚌𝚑𝕫𝕒𝕔𝕙𝘇𝗮𝗰𝗵𝙯𝙖𝙘𝙝𝓏𝒶𝒸𝒽
-	encodeHaHa = []rune("zachZACH𝐳𝐚𝐜𝐡𝚣𝚊𝚌𝚑𝕫𝕒𝕔𝕙𝘇𝗮𝗰𝗵𝙯𝙖𝙘𝙝𝓏𝒶𝒸𝒽𝑧𝑎𝑐ℎ𝒛𝒂𝒄𝒉𝗓𝖺𝖼𝗁𝔃𝓪𝓬𝓱⒵⒜⒞⒣ｚａｃｈⓩⓐⓒⓗ🅉🄰🄲🄷") // 𝑧𝑎𝑐ℎ𝒛𝒂𝒄𝒉𝗓𝖺𝖼𝗁𝔃𝓪𝓬𝓱⒵⒜⒞⒣ｚａｃｈⓩⓐⓒⓗ🅉🄰🄲🄷
-	numOfBits  = int(math.Log2(float64(len(encodeHaHa))))
-
+	//charset = []rune("zachZACH") //  zachZACH𝐳𝐚𝐜𝐡𝚣𝚊𝚌𝚑𝕫𝕒𝕔𝕙𝘇𝗮𝗰𝗵𝙯𝙖𝙘𝙝𝓏𝒶𝒸𝒽
+	charset = []rune("zachZACH𝐳𝐚𝐜𝐡𝚣𝚊𝚌𝚑𝕫𝕒𝕔𝕙𝘇𝗮𝗰𝗵𝙯𝙖𝙘𝙝𝓏𝒶𝒸𝒽𝑧𝑎𝑐ℎ𝒛𝒂𝒄𝒉𝗓𝖺𝖼𝗁𝔃𝓪𝓬𝓱⒵⒜⒞⒣ｚａｃｈⓩⓐⓒⓗ🅉🄰🄲🄷") // 𝑧𝑎𝑐ℎ𝒛𝒂𝒄𝒉𝗓𝖺𝖼𝗁𝔃𝓪𝓬𝓱⒵⒜⒞⒣ｚａｃｈⓩⓐⓒⓗ🅉🄰🄲🄷
+	//encodeHaHa = []rune("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+	//numOfBits  = int(math.Log2(float64(len(encodeHaHa))))
+	coding *aces.Coding
 	//currProcess *os.Process
 )
 
@@ -35,6 +35,12 @@ Example session:
 		return
 	}
 	rand.Seed(time.Now().UnixNano())
+	var err error
+	coding, err = aces.NewCoding(charset)
+	if err != nil {
+		panic(err)
+	}
+
 	if os.Args[1] == "import" {
 		err := makeNewZvmExecutable(os.Args[2])
 		if err != nil {
@@ -42,20 +48,8 @@ Example session:
 		}
 		return
 	}
-	//
-	//s := make(chan os.Signal, 1)
-	//signal.Notify(s)
-	//go func() {
-	//	for sig := range s {
-	//		if currProcess != nil {
-	//			//fmt.Println("signaling")
-	//			currProcess.Signal(sig)
-	//			//fmt.Println(err)
-	//		}
-	//	}
-	//}()
 
-	err := runZvmExecutable(os.Args[1]+".zvm", os.Args[2:]...)
+	err = runZvmExecutable(os.Args[1]+".zvm", os.Args[2:]...)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -71,20 +65,26 @@ func makeNewZvmExecutable(exe string) error {
 		return err
 	}
 	pr, pw := io.Pipe()
+	gzw, _ := gzip.NewWriterLevel(pw, gzip.BestCompression)
 	go func() {
-		// src -> gzip -> pw -> pr -> encode -> dst
-		w, _ := gzip.NewWriterLevel(pw, gzip.BestCompression)
-		_, err = io.Copy(w, src)
+		_, err = io.Copy(gzw, src)
 		if err != nil {
 			panic(err)
 		}
-		err := w.Close()
+		err := src.Close()
 		if err != nil {
 			panic(err)
 		}
-		pw.Close()
+		err = gzw.Close()
+		if err != nil {
+			panic(err)
+		}
+		err = pw.Close()
+		if err != nil {
+			panic(err)
+		}
 	}()
-	err = encode(dst, pr)
+	err = coding.Encode(dst, pr)
 	if err != nil {
 		panic(err)
 	}
@@ -99,7 +99,7 @@ func runZvmExecutable(zvme string, args ...string) error {
 	defer os.Remove(toRun.Name())
 	src, err := os.Open(zvme)
 	if err != nil {
-		return err
+		panic(err)
 	}
 
 	if err = toRun.Chmod(0755); err != nil { // rwx r-x r-x
@@ -108,21 +108,23 @@ func runZvmExecutable(zvme string, args ...string) error {
 
 	pr, pw := io.Pipe()
 	go func() {
-		err = decode(pw, src)
+		err = coding.Decode(pw, src)
 		if err != nil {
 			panic(err)
 		}
 		src.Close()
 		pw.Close()
 	}()
-	r, err := gzip.NewReader(pr)
+	gzr, err := gzip.NewReader(pr)
 	if err != nil {
-		return err
+		panic(err)
 	}
-	_, err = io.Copy(toRun, r)
+
+	_, err = io.Copy(toRun, gzr)
 	if err != nil {
-		return err
+		panic(err)
 	}
+
 	toRun.Sync()
 	toRun.Close()
 	cmd := exec.Command(toRun.Name(), args...)
@@ -131,68 +133,6 @@ func runZvmExecutable(zvme string, args ...string) error {
 	if err = cmd.Start(); err != nil {
 		return err
 	}
-
-	//currProcess = cmd.Process
-	//s := make(chan os.Signal, 4)
-	//signal.Notify(s)
-	//go func() {
-	//	for _ = range s {
-	//		fmt.Println("I WILL NOT STOP")
-	//		time.AfterFunc(time.Second*5, func() {
-	//			os.Exit(0)
-	//		})
-	//		//cmd.Process.Signal(sig)
-	//	}
-	//}()
 	err = cmd.Wait()
 	return err
-}
-
-func encode(dst io.Writer, src io.Reader) error {
-
-	r := bitstream.NewReader(src, nil)
-	res := make([]byte, 0, 1024)
-	for {
-		chunk, err := r.ReadNBitsAsUint8(uint8(numOfBits))
-		if err != nil {
-			if err == io.EOF {
-				_, err = dst.Write(res)
-			}
-			return err
-		}
-		res = append(res, string(encodeHaHa[chunk])...)
-		if len(res) > 1024 {
-			n, err := dst.Write(res)
-			if err != nil {
-				return err
-			}
-			if n != len(res) {
-				panic("whoa")
-			}
-			res = make([]byte, 0, 1024)
-		}
-	}
-}
-
-func decode(dst io.Writer, src io.Reader) error {
-	w := bitstream.NewWriter(dst)
-	br := bufio.NewReader(src)
-	for {
-		r, _, err := br.ReadRune()
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return err
-		}
-		for i, char := range encodeHaHa {
-			if r == char {
-				err := w.WriteNBitsOfUint8(uint8(numOfBits), byte(i))
-				if err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return w.Flush()
 }
