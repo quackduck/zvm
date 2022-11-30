@@ -42,16 +42,16 @@ Example session:
 	}
 
 	if os.Args[1] == "import" {
-		err := makeNewZvmExecutable(os.Args[2])
+		err = makeNewZvmExecutable(os.Args[2])
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println("error:", err)
 		}
 		return
 	}
 
 	err = runZvmExecutable(os.Args[1]+".zvm", os.Args[2:]...)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println("error:", err)
 	}
 }
 
@@ -66,28 +66,60 @@ func makeNewZvmExecutable(exe string) error {
 	}
 	pr, pw := io.Pipe()
 	gzw, _ := gzip.NewWriterLevel(pw, gzip.BestCompression)
+
+	errch := make(chan error)
 	go func() {
-		_, err = io.Copy(gzw, src)
+		_, err := io.Copy(gzw, src)
 		if err != nil {
-			panic(err)
+			errch <- err
+			return
 		}
-		err := src.Close()
+		err = src.Close()
 		if err != nil {
-			panic(err)
+			errch <- err
+			return
 		}
 		err = gzw.Close()
 		if err != nil {
-			panic(err)
+			errch <- err
+			return
 		}
 		err = pw.Close()
 		if err != nil {
-			panic(err)
+			errch <- err
+			return
 		}
+		errch <- nil
 	}()
-	err = coding.Encode(dst, pr)
+
+	go func() {
+		err := coding.Encode(dst, pr)
+		if err != nil {
+			errch <- err
+			return
+		}
+		err = dst.Close()
+		if err != nil {
+			errch <- err
+			return
+		}
+		err = pr.Close()
+		if err != nil {
+			errch <- err
+			return
+		}
+		errch <- nil
+	}()
+
+	err = <-errch
 	if err != nil {
-		panic(err)
+		return err
 	}
+	err = <-errch // if the first one was nil, wait for the second one
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -96,7 +128,12 @@ func runZvmExecutable(zvme string, args ...string) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(toRun.Name())
+	defer func() {
+		err = os.Remove(toRun.Name())
+		if err != nil {
+			fmt.Println("could not delete", toRun.Name(), err)
+		}
+	}()
 	src, err := os.Open(zvme)
 	if err != nil {
 		panic(err)
@@ -107,26 +144,69 @@ func runZvmExecutable(zvme string, args ...string) error {
 	}
 
 	pr, pw := io.Pipe()
+
+	errch := make(chan error)
+
 	go func() {
 		err = coding.Decode(pw, src)
 		if err != nil {
-			panic(err)
+			errch <- err
+			return
 		}
-		src.Close()
-		pw.Close()
+		err = src.Close()
+		if err != nil {
+			errch <- err
+			return
+		}
+		err = pw.Close()
+		if err != nil {
+			errch <- err
+			return
+		}
+		errch <- nil
 	}()
+
 	gzr, err := gzip.NewReader(pr)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
-	_, err = io.Copy(toRun, gzr)
+	go func() {
+		_, err = io.Copy(toRun, gzr)
+		if err != nil {
+			errch <- err
+			return
+		}
+		err = gzr.Close()
+		if err != nil {
+			errch <- err
+			return
+		}
+		err = pr.Close()
+		if err != nil {
+			errch <- err
+			return
+		}
+		errch <- nil
+	}()
+
+	err = <-errch
 	if err != nil {
-		panic(err)
+		return err
+	}
+	err = <-errch // if the first one was nil, wait for the second one
+	if err != nil {
+		return err
 	}
 
-	toRun.Sync()
-	toRun.Close()
+	err = toRun.Sync()
+	if err != nil {
+		return err
+	}
+	err = toRun.Close()
+	if err != nil {
+		return err
+	}
 	cmd := exec.Command(toRun.Name(), args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
